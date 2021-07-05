@@ -115,6 +115,7 @@ def get_media_shortcodes(session, csrf, userid):
     response_json = res.json()
 
     media_shortcodes = []
+    post_timestamps = []
 
     count = 1
 
@@ -123,7 +124,7 @@ def get_media_shortcodes(session, csrf, userid):
         for edges in response_json["data"]["user"]["edge_owner_to_timeline_media"]["edges"]:
             print(f"received shortcode : {edges['node']['shortcode']}")
             media_shortcodes.append(edges["node"]["shortcode"])
-            return media_shortcodes
+            post_timestamps.append(edges["node"]["taken_at_timestamp"])
 
         end_cursor = response_json["data"]["user"]["edge_owner_to_timeline_media"]["page_info"]["end_cursor"]
 
@@ -145,7 +146,7 @@ def get_media_shortcodes(session, csrf, userid):
         count += 1
 
     print(media_shortcodes)
-    return media_shortcodes
+    return media_shortcodes, post_timestamps
 
 
 """ 
@@ -155,9 +156,11 @@ function that gets downloadable media links from media shortcodes
 @param media_shortcodes array of media shortcodes
 @returns array of media links
 """
-def get_media_links(session, csrf, media_shortcodes):
+def get_media_links(session, csrf, media_shortcodes, post_timestamps):
     count = 1
+    index = 0
     media_links = []
+    media_timestamps = []
     for shortcode in media_shortcodes:
         url = f"https://www.instagram.com/p/{shortcode}/?__a=1"
         res = session.get(url, headers={
@@ -172,29 +175,35 @@ def get_media_links(session, csrf, media_shortcodes):
         
         # if a post has multiple media as carousal
         if "edge_sidecar_to_children" in media_json:
+            offset = 0
             for edge in media_json["edge_sidecar_to_children"]["edges"]:
                 count += 1
                 # check if media is video or image
                 if("video_url" in edge['node']):
                     print(f"found link {count} : {edge['node']['video_url']}")
                     media_links.append(f"1{edge['node']['video_url']}")
+                    media_timestamps.append(post_timestamps[index]+offset)
                 else: 
                     print(f"found link {count} : {edge['node']['display_url']}")
                     media_links.append(edge['node']['display_url'])
+                    media_timestamps.append(post_timestamps[index]+offset)
+                offset += 1
                     
         else:
             count += 1
             if("video_url" in media_json):
                     print(f"found link {count} : {media_json['video_url']}")
                     media_links.append(f"1{media_json['video_url']}")
+                    media_timestamps.append(post_timestamps[index])
             else:
                 print(f"found link {count} : {media_json['display_url']}")
                 media_links.append(media_json['display_url'])
+                media_timestamps.append(post_timestamps[index])
         
-        return media_links
+        index += 1
 
     print(f"final count : {len(media_links)}")
-    return media_links
+    return media_links, media_timestamps
 
 """ 
 function that downloads media and writes to file
@@ -203,7 +212,7 @@ also creates folder
 @param csrf csrf token
 @param media_links array of media_links
 """
-def download_media(session, csrf, media_links):
+def download_media(session, csrf, media_links, media_timestamps):
     count = 1
 
     # deleting directory if exists
@@ -234,6 +243,8 @@ def download_media(session, csrf, media_links):
             with open(f"{dir}/{count}.{extension}", 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
+
+        os.utime(f'{dir}/{count}.{extension}', (media_timestamps[count-1], media_timestamps[count-1]))
         
         count += 1
 
@@ -251,13 +262,15 @@ def main():
     userid = get_userid(session=session, csrf=csrf)
 
     # get all media shortcodes
-    media_shortcodes = get_media_shortcodes(session=session, csrf=csrf, userid=userid)
+    media_shortcodes, post_timestamps = get_media_shortcodes(session=session, csrf=csrf, userid=userid)
     
     # get all media links from shortcodes
-    media_links = get_media_links(session=session, csrf=csrf, media_shortcodes=media_shortcodes)
+    media_links, media_timestamps = get_media_links(session=session, csrf=csrf, media_shortcodes=media_shortcodes, post_timestamps=post_timestamps)
 
     # download media
-    download_media(session=session, csrf=csrf, media_links=media_links)
+    download_media(session=session, csrf=csrf, media_links=media_links, media_timestamps=media_timestamps)
+
+    print("successfully scraped!")
 
 if __name__ == '__main__':
     main()
