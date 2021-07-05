@@ -8,7 +8,7 @@
 A python script which will recursively visit every sub-folder in the current directory and organise each file according to the Year and Month of it's creation.
 
 ## How to use
-Download the file `File_Organiser.md` and `input.txt` and place it in the directory where the organising needs to be done.
+Download the file `File_Organiser.py` and `input.txt` and place it in the directory where the organising needs to be done.
 
 Run the script and voila! Your job is done.
 
