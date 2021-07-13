@@ -3,6 +3,9 @@ import requests
 import os
 import shutil
 from datetime import datetime
+import logging
+
+logging.basicConfig(filename='insta-downloader.log', level=logging.DEBUG)
 
 # define constants
 USERNAME = 'YOUR_USERNAME'
@@ -16,6 +19,8 @@ scrape_url = 'https://www.instagram.com/graphql/query/?query_id=1788848332005918
 userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36"
 time = int(datetime.now().timestamp())
 
+TOTAL_POST_COUNT = 0
+
 """ 
 function that returns the csrf token from instagram
 @param session user session object
@@ -23,14 +28,25 @@ function that returns the csrf token from instagram
 """
 def get_csrf_token(session):
 
+    logging.info("inside csrf function")
     print("getting csrf token")
 
-    session.headers = {"user-agent": userAgent}
-    session.headers.update({"Referer": link})
-    res = session.get(link)
-    csrf = re.findall(r"csrf_token\":\"(.*?)\"", res.text)[0]
-    print(f"received csrf token : {csrf}")
-    return csrf
+    try:
+        session.headers = {"user-agent": userAgent}
+        session.headers.update({"Referer": link})
+        res = session.get(link)
+        logging.info("csrf request made")
+        logging.info(res.text)
+        csrf = re.findall(r"csrf_token\":\"(.*?)\"", res.text)[0]
+        print(f"received csrf token : {csrf}")
+        logging.info(f"received csrf token : {csrf}")
+        return csrf
+
+    except Exception as e:
+        print("error occurred")
+        logging.error("error while getting csrf token")
+        logging.error(e)
+        exit(1)
 
 
 """ 
@@ -40,30 +56,40 @@ function that logins to instagram using the generated csrf token
 """
 def login_to_instagram(session, csrf):
 
+    logging.info("inside login to instagram function")
     print("logging in")
 
-    payload = {
-        'username': USERNAME,
-        'enc_password': f'#PWD_INSTAGRAM_BROWSER:0:{time}:{PASSWORD}',
-        'queryParams': {},
-        'optIntoOneTap': 'false'
-    }
-    res = session.post(login_url, data=payload, headers={
-        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
-        "x-requested-with": "XMLHttpRequest",
-        "referer": "https://www.instagram.com/accounts/login/",
-        "x-csrftoken": csrf
-    })
+    try:
+        payload = {
+            'username': USERNAME,
+            'enc_password': f'#PWD_INSTAGRAM_BROWSER:0:{time}:{PASSWORD}',
+            'queryParams': {},
+            'optIntoOneTap': 'false'
+        }
+        res = session.post(login_url, data=payload, headers={
+            "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
+            "x-requested-with": "XMLHttpRequest",
+            "referer": "https://www.instagram.com/accounts/login/",
+            "x-csrftoken": csrf
+        })
+        logging.info(res.json())
+        print("received login response : ")
+        print(res.json())
 
-    print("received login response : ")
-    print(res.json())
+        # confirm logged in
+        response_json = res.json()
+        if(response_json["authenticated"] != True):
+            print("login failed")
+            logging.error("login failed")
+            exit(1)
 
-    # confirm logged in
-    response_json = res.json()
-    if(response_json["authenticated"] != True):
-        print("login failed")
+    except Exception as e:
+        print("error while logging in")
+        logging.error("error while logging in")
+        logging.error(e)
         exit(1)
 
+    logging.info("login success")
     print("login successful!")
 
 
@@ -76,21 +102,32 @@ this is used in graphql queries
 """
 def get_userid(session, csrf):
 
+    logging.info("inside get_userid function")
     print("getting userid of user to be scraped")
 
-    url = f'{base_url}/{SCRAPE_USERNAME}/?__a=1'
+    try:
+        url = f'{base_url}/{SCRAPE_USERNAME}/?__a=1'
 
-    res = session.get(url, headers={
-        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
-        "x-requested-with": "XMLHttpRequest",
-        "referer": "https://www.instagram.com/accounts/login/",
-        "x-csrftoken": csrf
-    })
+        res = session.get(url, headers={
+            "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
+            "x-requested-with": "XMLHttpRequest",
+            "referer": "https://www.instagram.com/accounts/login/",
+            "x-csrftoken": csrf
+        })
 
-    response_json = res.json()
-    userid = response_json["graphql"]["user"]["id"]
+        logging.info(res.json())
 
-    print(f"got user id : {userid}") 
+        response_json = res.json()
+        userid = response_json["graphql"]["user"]["id"]
+
+        logging.info(f"user id : {userid}")
+        print(f"got user id : {userid}") 
+    
+    except Exception as e:
+        print("error occurred while fetching userid")
+        logging.error("error occurred while fetching userid")
+        logging.error(e)
+        exit(1)
 
     return userid
 
@@ -103,49 +140,68 @@ function that gets media shortcodes of all posts
 @returns array of media shortcodes
 """
 def get_media_shortcodes(session, csrf, userid):
+
+    global TOTAL_POST_COUNT
+    
+    logging.info("inside get media shortcodes function")
+
     print("fetching all media links")
-    url = f'{scrape_url}&id={userid}&first=20'
+    try:
+        url = f'{scrape_url}&id={userid}&first=20'
 
-    res = session.get(url, headers={
-        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
-        "x-requested-with": "XMLHttpRequest",
-        "referer": "https://www.instagram.com/accounts/login/",
-        "x-csrftoken": csrf
-    })
-    response_json = res.json()
-
-    media_shortcodes = []
-    post_timestamps = []
-
-    count = 1
-
-    while(True):
-        print(f"Processing page {count}")
-        for edges in response_json["data"]["user"]["edge_owner_to_timeline_media"]["edges"]:
-            print(f"received shortcode : {edges['node']['shortcode']}")
-            media_shortcodes.append(edges["node"]["shortcode"])
-            post_timestamps.append(edges["node"]["taken_at_timestamp"])
-
-        end_cursor = response_json["data"]["user"]["edge_owner_to_timeline_media"]["page_info"]["end_cursor"]
-
-        if len(end_cursor) == 0:
-            break
-
-        print(f"received end cursor : {end_cursor}")
-
-        nexturl = f'{url}&after={end_cursor}'
-
-        res = session.get(nexturl, headers={
+        res = session.get(url, headers={
             "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
             "x-requested-with": "XMLHttpRequest",
             "referer": "https://www.instagram.com/accounts/login/",
             "x-csrftoken": csrf
         })
         response_json = res.json()
+        logging.info(response_json)
 
-        count += 1
+        media_shortcodes = []
+        post_timestamps = []
+
+        count = 1
+
+        while(True):
+            print(f"Processing page {count}")
+            logging.info(f"Processing page {count}")
+            for edges in response_json["data"]["user"]["edge_owner_to_timeline_media"]["edges"]:
+                print(f"received shortcode : {edges['node']['shortcode']}")
+                logging.info(f"received shortcode : {edges['node']['shortcode']}, timestamp : {edges['node']['taken_at_timestamp']}")
+                media_shortcodes.append(edges["node"]["shortcode"])
+                post_timestamps.append(edges["node"]["taken_at_timestamp"])
+                count += 1
+
+            end_cursor = response_json["data"]["user"]["edge_owner_to_timeline_media"]["page_info"]["end_cursor"]
+
+            if len(end_cursor) == 0:
+                break
+
+            print(f"received end cursor : {end_cursor}")
+            logging.info(f"received end cursor : {end_cursor}")
+
+            nexturl = f'{url}&after={end_cursor}'
+
+            res = session.get(nexturl, headers={
+                "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
+                "x-requested-with": "XMLHttpRequest",
+                "referer": "https://www.instagram.com/accounts/login/",
+                "x-csrftoken": csrf
+            })
+            response_json = res.json()
+            logging.info(response_json)
+
+        TOTAL_POST_COUNT = count
+
+    except Exception as e:
+        print("error while making request for media short codes")
+        logging.error("error while making request for media short codes")
+        logging.error(e)
+        exit(1)
 
     print(media_shortcodes)
+    logging.info(media_shortcodes)
     return media_shortcodes, post_timestamps
 
 
@@ -161,48 +217,62 @@ def get_media_links(session, csrf, media_shortcodes, post_timestamps):
     index = 0
     media_links = []
     media_timestamps = []
+
+    global TOTAL_POST_COUNT
+
+    logging.info("inside get media links function")
+    print("fetching media links")
+
     for shortcode in media_shortcodes:
-        url = f"https://www.instagram.com/p/{shortcode}/?__a=1"
-        res = session.get(url, headers={
-            "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
-            "x-requested-with": "XMLHttpRequest",
-            "referer": "https://www.instagram.com/accounts/login/",
-            "x-csrftoken": csrf
-        })
+        try:
+            url = f"https://www.instagram.com/p/{shortcode}/?__a=1"
+            res = session.get(url, headers={
+                "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
+                "x-requested-with": "XMLHttpRequest",
+                "referer": "https://www.instagram.com/accounts/login/",
+                "x-csrftoken": csrf
+            })
 
-        response_json = res.json()
-        media_json = response_json["graphql"]["shortcode_media"]
-        
-        # if a post has multiple media as carousal
-        if "edge_sidecar_to_children" in media_json:
-            offset = 0
-            for edge in media_json["edge_sidecar_to_children"]["edges"]:
-                count += 1
-                # check if media is video or image
-                if("video_url" in edge['node']):
-                    print(f"found link {count} : {edge['node']['video_url']}")
-                    media_links.append(f"1{edge['node']['video_url']}")
-                    media_timestamps.append(post_timestamps[index]+offset)
-                else: 
-                    print(f"found link {count} : {edge['node']['display_url']}")
-                    media_links.append(edge['node']['display_url'])
-                    media_timestamps.append(post_timestamps[index]+offset)
-                offset += 1
-                    
-        else:
-            count += 1
-            if("video_url" in media_json):
-                    print(f"found link {count} : {media_json['video_url']}")
-                    media_links.append(f"1{media_json['video_url']}")
-                    media_timestamps.append(post_timestamps[index])
+            response_json = res.json()
+            media_json = response_json["graphql"]["shortcode_media"]
+            
+            # if a post has multiple media as carousal
+            if "edge_sidecar_to_children" in media_json:
+                offset = 0
+                for edge in media_json["edge_sidecar_to_children"]["edges"]:
+                    count += 1
+                    # check if media is video or image
+                    if("video_url" in edge['node']):
+                        print(f"found link {count} / {TOTAL_POST_COUNT} : {edge['node']['video_url']}")
+                        media_links.append(f"1{edge['node']['video_url']}")
+                        media_timestamps.append(post_timestamps[index]+offset)
+                    else: 
+                        print(f"found link {count} / {TOTAL_POST_COUNT} : {edge['node']['display_url']}")
+                        media_links.append(edge['node']['display_url'])
+                        media_timestamps.append(post_timestamps[index]+offset)
+                    offset += 1
+                        
             else:
-                print(f"found link {count} : {media_json['display_url']}")
-                media_links.append(media_json['display_url'])
-                media_timestamps.append(post_timestamps[index])
-        
-        index += 1
+                count += 1
+                if("video_url" in media_json):
+                        print(f"found link {count} / {TOTAL_POST_COUNT} : {media_json['video_url']}")
+                        media_links.append(f"1{media_json['video_url']}")
+                        media_timestamps.append(post_timestamps[index])
+                else:
+                    print(f"found link {count} / {TOTAL_POST_COUNT} : {media_json['display_url']}")
+                    media_links.append(media_json['display_url'])
+                    media_timestamps.append(post_timestamps[index])
+            
+            index += 1
+        except Exception as e:
+            print(f"error occurred while converting {shortcode} to media link")
+            logging.error(f"error occurred while converting {shortcode} to media link")
+            logging.error(e)
 
-    print(f"final count : {len(media_links)}")
+    TOTAL_POST_COUNT = count
+    print(f"final count : {count}")
+    logging.info(f"final count : {count}")
+    logging.info(media_links)
     return media_links, media_timestamps
 
 """ 
@@ -215,6 +285,10 @@ also creates folder
 def download_media(session, csrf, media_links, media_timestamps):
     count = 1
 
+    global TOTAL_POST_COUNT
+    logging.info("inside download media function")
+    print("downloading media")
+
     # deleting directory if exists
     current_directory = os.path.abspath(os.getcwd())
     dir = f'{current_directory}/{SCRAPE_USERNAME}'
@@ -223,30 +297,39 @@ def download_media(session, csrf, media_links, media_timestamps):
     os.makedirs(dir)
 
     for link in media_links:
-        extension = "jpg"
-        # check if link is video
-        if(link[0] == '1'):
-            link = link[1:]
-            extension = "mp4"
+        try:
+            extension = "jpg"
+            # check if link is video
+            if(link[0] == '1'):
+                link = link[1:]
+                extension = "mp4"
 
-        print(f"writing media {count} : {link}")
+            print(f"writing media {count} / {TOTAL_POST_COUNT} : {link}")
 
-        # stream data for performance reasons
-        with session.get(link, headers={
-            "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
-            "x-requested-with": "XMLHttpRequest",
-            "referer": "https://www.instagram.com/accounts/login/",
-            "x-csrftoken": csrf
-        }, stream=True) as r:
+            # stream data for performance reasons
+            with session.get(link, headers={
+                "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
+                "x-requested-with": "XMLHttpRequest",
+                "referer": "https://www.instagram.com/accounts/login/",
+                "x-csrftoken": csrf
+            }, stream=True) as r:
 
-            r.raise_for_status()
-            with open(f"{dir}/{count}.{extension}", 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
+                r.raise_for_status()
+                with open(f"{dir}/{count}.{extension}", 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
 
-        os.utime(f'{dir}/{count}.{extension}', (media_timestamps[count-1], media_timestamps[count-1]))
-        
-        count += 1
+            os.utime(f'{dir}/{count}.{extension}', (media_timestamps[count-1], media_timestamps[count-1]))
+            
+            count += 1
+
+        except Exception as e:
+            print(f"error occurred when downloading from {link}")
+            logging.error(f"error occurred when downloading from {link}")
+            logging.error(e)
+    
+    print(f"total {count} / {TOTAL_POST_COUNT} downloaded")
+    logging.info(f"total {count} / {TOTAL_POST_COUNT} downloaded")
 
 def main(): 
     # start a user session
